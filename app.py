@@ -86,23 +86,29 @@ if special:
 result = base.sort_values("Data Cadastro").head(num_procs)
 
 # ------------------------- ALERTAS -------------------------
+def alert_row(row):
+    # condição básica
+    alert = (
+        (row["Dias no Orgão"] > 180) |
+        (row["Tempo TCERJ"] > 1825)
+    )
+    # regras extras para Contratação / Concurso
+    if special:
+        if (
+            (row["Dias no Orgão"] >= 360) |
+            (row["Dias no Orgão"] >= 720) |
+            (row["Tempo TCERJ"] >= 360) |
+            (row["Tempo TCERJ"] >= 720)
+        ):
+            alert = True
 
-TODAY = dt.date.today()
+    # um estilo para cada coluna da linha
+    return ["background-color:#ffcccc" if alert else "" for _ in row]
 
-def alert_color(row):
-    alert = False
-    # Regras gerais
-    if row["Dias no Orgão"] > 180 or row["Tempo TCERJ"] > 1825:
-        alert = True
-    # Regras extras
-    if special and (row["Dias no Orgão"] >= 360 or row["Dias no Orgão"] >= 720 or row["Tempo TCERJ"] >= 360 or row["Tempo TCERJ"] >= 720):
-        alert = True
-    return "background-color:#ffcccc" if alert else ""
-
-styled = result.style.applymap(lambda _: "background:#ffcccc", subset=pd.IndexSlice[result["Dias no Orgão"] > 180, :])
+styled = result.style.apply(alert_row, axis=1)
 
 st.subheader("📋 Resultado dos processos priorizados")
-st.dataframe(result.style.applymap(alert_color), use_container_width=True)
+st.dataframe(styled, use_container_width=True)
 
 # ------------------------- DASHBOARD -------------------------
 with st.expander("📊 Dashboard de apoio"):
