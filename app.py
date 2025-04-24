@@ -6,6 +6,8 @@ import datetime as dt
 import io, ssl, smtplib
 from email.message import EmailMessage
 
+TODAY = dt.date.today()
+
 st.set_page_config(page_title="Controle de Acervo 3ª CAP", layout="wide")
 
 TYPICAL_GROUPS = [
