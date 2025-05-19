@@ -199,18 +199,76 @@ else:
 # -----------------------------------------------------------------------------
 # (4) ANALISE – DOCUMENTOS NA COLUNA OBS
 # -----------------------------------------------------------------------------
-with st.expander("🔍 Identificação de DOCS não juntados" ):
-    # filtra somente DOCUMENTO
+with st.expander("🔍 Identificação de DOCS não juntados"):
+
+    # --- Filtra DOCUMENTOS ---
     docs_df = acervo_raw[acervo_raw["Tipo Processo"].str.upper() == "DOCUMENTO"].copy()
     docs_df["processo_observado"] = docs_df["Observação"].astype(str).str.extract(r"(\d{6}-\d+/\d{4})", expand=False)
 
-    # separa encontrados e não encontrados
+    # Identifica se há processo principal na 3ª CAP
     manter_set = set(df["Processo"].astype(str).str.strip())
     docs_df["encontrado_na_3cap"] = docs_df["processo_observado"].isin(manter_set)
 
     docs_com = docs_df[docs_df["encontrado_na_3cap"] == True]
     docs_sem = docs_df[docs_df["encontrado_na_3cap"] == False]
 
+    # -------------------------------------------------------------------------
+    # NOVO PAINEL: DOCs NÃO JUNTADOS - NATUREZA NÃO HABITUAL
+    # -------------------------------------------------------------------------
+    st.markdown("### 🛑 DOCs não juntados com *Natureza não habitual*")
+
+    # Filtros de tempo para 'Data Última Carga'
+    filtro_periodo = st.radio(
+        "Período:",
+        ["Todos", "Últimos 7 dias", "Últimos 3 dias", "Último dia"],
+        horizontal=True,
+        key="filtro_docs_atipicos"
+    )
+
+    # Trata datas
+    docs_sem["Data Última Carga"] = pd.to_datetime(docs_sem["Data Última Carga"], errors="coerce")
+    hoje = TODAY
+    if filtro_periodo == "Últimos 7 dias":
+        dt_ini = hoje - dt.timedelta(days=7)
+        docs_sem_filtro = docs_sem[docs_sem["Data Última Carga"].dt.date >= dt_ini]
+    elif filtro_periodo == "Últimos 3 dias":
+        dt_ini = hoje - dt.timedelta(days=3)
+        docs_sem_filtro = docs_sem[docs_sem["Data Última Carga"].dt.date >= dt_ini]
+    elif filtro_periodo == "Último dia":
+        docs_sem_filtro = docs_sem[docs_sem["Data Última Carga"].dt.date == hoje]
+    else:
+        docs_sem_filtro = docs_sem.copy()
+
+    # Filtra naturezas não habituais
+    docs_sem_atipicos = docs_sem_filtro[~docs_sem_filtro["Grupo Natureza"].isin(TYPICAL_GROUPS)].copy()
+
+    st.write(f"Total: **{len(docs_sem_atipicos)}** DOCs não juntados com natureza não habitual ({filtro_periodo.lower()})")
+
+    if not docs_sem_atipicos.empty:
+        st.dataframe(
+            docs_sem_atipicos[
+                ["Processo", "Grupo Natureza", "Data Última Carga", "Observação", "processo_observado"]
+            ],
+            use_container_width=True
+        )
+
+        # Download
+        def to_excel_docs_atipicos(df_):
+            mem = io.BytesIO()
+            with pd.ExcelWriter(mem, engine="xlsxwriter") as writer:
+                df_.to_excel(writer, index=False, sheet_name="DOCs_NaoHabitual")
+            return mem.getvalue()
+        st.download_button(
+            "💾 Baixar DOCs não juntados (não habitual)",
+            to_excel_docs_atipicos(docs_sem_atipicos),
+            file_name=f"docs_nao_juntados_atipicos_{filtro_periodo.replace(' ', '_').lower()}_{TODAY.isoformat()}.xlsx"
+        )
+    else:
+        st.info("Nenhum DOC não juntado com natureza não habitual para o filtro selecionado.")
+
+    # -------------------------------------------------------------------------
+    # PAINEL PADRÃO: DOCs não juntados - COM/SEM proc principal
+    # -------------------------------------------------------------------------
     colC1, colC2 = st.columns(2)
     with colC1:
         st.subheader("DOCS não juntados COM proc. principal na 3ª CAP")
@@ -221,14 +279,19 @@ with st.expander("🔍 Identificação de DOCS não juntados" ):
         st.write(f"Total: **{len(docs_sem)}**")
         st.dataframe(docs_sem[["Processo", "Observação", "processo_observado"]], use_container_width=True)
 
-    # opção download
+    # Download ZIP com ambos
     def _tozip():
         mem = io.BytesIO()
         with pd.ExcelWriter(mem, engine="xlsxwriter") as writer:
             docs_com.to_excel(writer, index=False, sheet_name="COM_principal")
             docs_sem.to_excel(writer, index=False, sheet_name="SEM_principal")
         return mem.getvalue()
-    st.download_button("💾 Baixar resultado DOCS (Excel)", _tozip(), file_name=f"docs_nao_juntados_{TODAY.isoformat()}.xlsx")
+    st.download_button(
+        "💾 Baixar resultado DOCS (Excel)",
+        _tozip(),
+        file_name=f"docs_nao_juntados_{TODAY.isoformat()}.xlsx"
+    )
+
 
 # -----------------------------------------------------------------------------
 # DASHBOARD RÁPIDO
