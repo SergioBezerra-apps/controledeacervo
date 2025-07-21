@@ -149,6 +149,7 @@ base = base.sort_values([
     "Data Cadastro"  # mais antigo primeiro
 ], ascending=[False, False, False, False, True])
 
+full_result = base.copy()
 result = base.head(num_procs).copy()
 
 # -----------------------------------------------------------------------------
@@ -170,6 +171,7 @@ if result.empty:
     st.info("Nenhum processo encontrado com os filtros atuais.")
 else:
     st.dataframe(result.drop(columns=["pri_flag_tce", "pri_flag_dias"]).style.apply(alert_row, axis=1), use_container_width=True)
+    st.caption(f"Exibindo os primeiros {num_procs} processos. O arquivo em Excel inclui todos os resultados filtrados.")
 
     # download
     def to_excel_bytes(df_):
@@ -177,8 +179,8 @@ else:
         with pd.ExcelWriter(out, engine="xlsxwriter") as w:
             df_.to_excel(w, index=False, sheet_name="Prioridade")
         return out.getvalue()
-    excel_bytes = to_excel_bytes(result)
-    st.download_button("💾 Baixar relatório em Excel", data=excel_bytes, file_name=f"processos_prioritarios_{TODAY.isoformat()}.xlsx")
+    excel_bytes = to_excel_bytes(full_result)
+    st.download_button("💾 Baixar relatório completo (Excel)", data=excel_bytes, file_name=f"processos_prioritarios_{TODAY.isoformat()}.xlsx")
 
     # envio email
     st.subheader("✉️ Enviar por e-mail")
