@@ -1,5 +1,5 @@
-# Streamlit app for process control and reporting – v3 (melhorias solicitadas)  
-# Autor: ChatGPT (OpenAI) – ajustado conforme requisicoes de Sérgio Luiz (3ª CAP)
+# Streamlit app for process control and reporting – v3.1 (com seletor de critérios)
+# Autor: ChatGPT (OpenAI) – ajustado conforme requisicoes de Sérgio Luiz (3ª CAP)
 # -----------------------------------------------------------------------------
 # IMPORTS
 # -----------------------------------------------------------------------------
@@ -13,7 +13,7 @@ from email.message import EmailMessage
 # -----------------------------------------------------------------------------
 # CONFIG BASICA
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Controle de Acervo TCE‑RJ", layout="wide")
+st.set_page_config(page_title="Controle de Acervo TCE-RJ", layout="wide")
 TODAY = dt.date.today()
 
 TYPICAL_GROUPS = [
@@ -29,7 +29,7 @@ TYPICAL_GROUPS = [
     "PENSÃO (RETIFICAÇÃO)",
     "PROMOÇÃO",
     "REFORMA",
-    "REFORMA (RETIFICAÇÃO)"
+    "REFORMA (RETIFICAÇÃO)",  # vírgula corrigida
     "RESPOSTA A OFÍCIO",
     "REVISÃO DE PENSÃO",
     "REVISÃO DE PENSÃO (RETIFICAÇÃO)",
@@ -42,7 +42,7 @@ TYPICAL_GROUPS = [
 # -----------------------------------------------------------------------------
 # UPLOADS
 # -----------------------------------------------------------------------------
-st.title("📑 Controle de Acervo & Relatórios – 3ª CAP / TCE‑RJ")
+st.title("📑 Controle de Acervo & Relatórios – 3ª CAP / TCE-RJ")
 
 upload_acervo = st.file_uploader("⬆️ Carregue a planilha *acervo portal bi.xlsx*", type=["xlsx"])
 upload_manter = st.file_uploader("⬆️ Carregue *processosmanter.xlsx*", type=["xlsx"])
@@ -52,7 +52,7 @@ if not upload_acervo or not upload_manter:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# LOAD & PRE‑TREAT
+# LOAD & PRE-TREAT
 # -----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_data(acervo_bytes, manter_bytes):
@@ -126,7 +126,8 @@ if max_tce:
     base = base[base["Tempo TCERJ"] <= max_tce]
 
 if sessao_filter != "Todos":
-    base = base[base["Já foi a Sessão"].str.upper() == sessao_filter]
+    # cuidado: se houver NaN, str.upper() pode falhar; convertemos antes
+    base = base[base["Já foi a Sessão"].astype(str).str.upper() == sessao_filter]
 
 # regras especiais mantidas
 special = selected_gn in [
@@ -136,18 +137,74 @@ special = selected_gn in [
 if special and selected_gn == "CONCURSO PÚBLICO":
     base = base[base["Natureza"].str.contains("ADMISSÃO DE CONCURSADO", case=False, na=False)]
 if special:
+    # manter a amostra com 1 processo por órgão, o mais antigo
     base = base.sort_values("Data Cadastro").drop_duplicates(subset=["Orgão Origem"], keep="first")
 
-# (3) ordenação: 1º Tempo TCERJ > 1800 desc, depois Dias > 150 desc, senão Data Cadastro
-base["pri_flag_tce"] = base["Tempo TCERJ"] > 1800
-base["pri_flag_dias"] = base["Dias no Orgão"] > 150
-base = base.sort_values([
-    "pri_flag_tce",  # True primeiro
-    "Tempo TCERJ",   # desc
-    "pri_flag_dias", # True primeiro
-    "Dias no Orgão", # desc
-    "Data Cadastro"  # mais antigo primeiro
-], ascending=[False, False, False, False, True])
+# -----------------------------------------------------------------------------
+# (3) SELETOR DE CRITÉRIOS E ORDENAÇÃO
+# -----------------------------------------------------------------------------
+with st.expander("⚖️ Parâmetros de critério de prioridade (configuráveis)"):
+    colC1, colC2, colC3 = st.columns(3)
+    with colC1:
+        limiar_5anos = st.number_input("01) Limiar 'Mais de 5 anos' (dias) – usa '>'", value=1765, min_value=1, step=5)
+    with colC2:
+        janela_min_prox5 = st.number_input("02) Janela inferior 'A completar 5 anos' (dias) – usa '<'", value=1220, min_value=0, step=5)
+    with colC3:
+        janela_max_prox5 = st.number_input("02) Janela superior 'A completar 5 anos' (dias) – usa '<'", value=1765, min_value=1, step=5)
+
+    dias_orgao_limiar = st.number_input("03) 'Mais de 5 meses na 3CAP' (dias) – usa '>='", value=150, min_value=1, step=5)
+
+    st.caption(
+        "Regra: 01) Tempo TCERJ > limiar_5anos; "
+        "02) janela_min_prox5 < Tempo TCERJ < janela_max_prox5; "
+        "03) Dias no Órgão ≥ dias_orgao_limiar; "
+        "04) Caso geral, ordena por Data da carga."
+    )
+
+# validações básicas
+if janela_max_prox5 <= janela_min_prox5:
+    st.error("A janela da regra 02 é inválida: o limite superior deve ser maior que o inferior.")
+    st.stop()
+
+# Cálculo do critério
+def calcula_criterio(row):
+    processo = str(row.get("Processo", "") or "").strip()
+    tempo_tce = row.get("Tempo TCERJ", None)
+    dias_orgao = row.get("Dias no Orgão", None)
+
+    if processo == "" or pd.isna(tempo_tce):
+        return "04 Data da carga"
+
+    if tempo_tce > limiar_5anos:
+        return "01 Mais de cinco anos de autuado"
+
+    if (not pd.isna(tempo_tce)) and (janela_min_prox5 < tempo_tce < janela_max_prox5):
+        return "02 A completar 5 anos de autuado"
+
+    if (not pd.isna(dias_orgao)) and (dias_orgao >= dias_orgao_limiar):
+        return "03 Mais de 5 meses na 3CAP"
+
+    return "04 Data da carga"
+
+base["Critério"] = base.apply(calcula_criterio, axis=1)
+
+priority_map = {
+    "01 Mais de cinco anos de autuado": 0,
+    "02 A completar 5 anos de autuado": 1,
+    "03 Mais de 5 meses na 3CAP": 2,
+    "04 Data da carga": 3,
+}
+base["Ordem Critério"] = base["Critério"].map(priority_map).fillna(3).astype(int)
+
+# Ordenação final:
+# 1) Ordem Critério (asc)
+# 2) Tempo TCERJ (desc) – desempate útil para 01/02
+# 3) Dias no Órgão (desc) – desempate útil para 03
+# 4) Data Cadastro (asc) – para 04
+base = base.sort_values(
+    ["Ordem Critério", "Tempo TCERJ", "Dias no Orgão", "Data Cadastro"],
+    ascending=[True, False, False, True]
+)
 
 full_result = base.copy()
 result = base.head(num_procs).copy()
@@ -155,7 +212,6 @@ result = base.head(num_procs).copy()
 # -----------------------------------------------------------------------------
 # HIGHLIGHT DE ALERTAS
 # -----------------------------------------------------------------------------
-
 def alert_row(row):
     alert = (row["Dias no Orgão"] > 180) or (row["Tempo TCERJ"] > 1825)
     if special:
@@ -170,8 +226,11 @@ st.subheader("📋 Processos priorizados")
 if result.empty:
     st.info("Nenhum processo encontrado com os filtros atuais.")
 else:
-    st.dataframe(result.drop(columns=["pri_flag_tce", "pri_flag_dias"]).style.apply(alert_row, axis=1), use_container_width=True)
-    st.caption(f"Exibindo os primeiros {num_procs} processos. O arquivo em Excel inclui todos os resultados filtrados.")
+    st.dataframe(
+        result.drop(columns=["Ordem Critério"], errors="ignore").style.apply(alert_row, axis=1),
+        use_container_width=True
+    )
+    st.caption(f"Exibindo os primeiros {num_procs} processos. O arquivo em Excel inclui todos os resultados filtrados (você pode ocultar a coluna auxiliar).")
 
     # download
     def to_excel_bytes(df_):
@@ -179,7 +238,11 @@ else:
         with pd.ExcelWriter(out, engine="xlsxwriter") as w:
             df_.to_excel(w, index=False, sheet_name="Prioridade")
         return out.getvalue()
-    excel_bytes = to_excel_bytes(full_result)
+
+    include_ordem_excel = st.checkbox("Incluir coluna auxiliar 'Ordem Critério' no Excel", value=False)
+    excel_df = full_result if include_ordem_excel else full_result.drop(columns=["Ordem Critério"], errors="ignore")
+    excel_bytes = to_excel_bytes(excel_df)
+
     st.download_button("💾 Baixar relatório completo (Excel)", data=excel_bytes, file_name=f"processos_prioritarios_{TODAY.isoformat()}.xlsx")
 
     # envio email
@@ -280,11 +343,11 @@ with st.expander("🔍 Identificação de DOCS não juntados"):
     # -------------------------------------------------------------------------
     colC1, colC2 = st.columns(2)
     with colC1:
-        st.subheader("DOCS não juntados COM proc. principal na 3ª CAP")
+        st.subheader("DOCS não juntados COM proc. principal na 3ª CAP")
         st.write(f"Total: **{len(docs_com)}**")
         st.dataframe(docs_com[["Processo", "Observação", "processo_observado"]], use_container_width=True)
     with colC2:
-        st.subheader("DOCS não juntados SEM proc. principal na 3ª CAP")
+        st.subheader("DOCS não juntados SEM proc. principal na 3ª CAP")
         st.write(f"Total: **{len(docs_sem)}**")
         st.dataframe(docs_sem[["Processo", "Observação", "processo_observado"]], use_container_width=True)
 
@@ -300,7 +363,6 @@ with st.expander("🔍 Identificação de DOCS não juntados"):
         _tozip(),
         file_name=f"docs_nao_juntados_{TODAY.isoformat()}.xlsx"
     )
-
 
 # -----------------------------------------------------------------------------
 # DASHBOARD RÁPIDO
@@ -325,4 +387,4 @@ with st.expander("📊 Dashboard de apoio"):
 # -----------------------------------------------------------------------------
 # RODAPÉ
 # -----------------------------------------------------------------------------
-st.caption(f"Desenvolvido para 3ª CAP / TCE‑RJ · {TODAY.year}")
+st.caption(f"Desenvolvido para 3ª CAP / TCE-RJ · {TODAY.year}")
